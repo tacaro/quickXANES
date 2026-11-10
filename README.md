@@ -34,6 +34,9 @@ Use `--out` or the *Output folder* field to change that.
 
 The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the default for every file. To drop a channel with spurious data from **one** file, untick it under *Channels used for this file*. It's then excluded from that file's Σ everywhere downstream and drawn dotted in the plot, while other files keep all channels. *Write binned files* saves `binned/<file>.csv` (energy, raw μ, and the raw columns used).
 
+![](shot1.jpg)
+
+
 **2 · QC.**
 - **Dead-time**: per-channel τ (μs). Each channel is scaled by ICR_true/ICR_measured, with the paralyzable model ICR_meas = ICR_true·exp(−ICR_true·τ) (or the non-paralyzable one). The correction is off until you tick *apply correction*, and τ = 0 leaves a channel uncorrected. Leave at zero if unsure, or speak with your beamline scientist!
 
@@ -43,11 +46,15 @@ The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the def
 
 *Write* saves `qc/<group>.csv` (averaged, calibrated, dead-time-corrected μ ± std) and `qc/qc_report.csv`.
 
+![](shot2.jpg)
+
 **3 · Normalize.** The pre-edge background is fit over a window and subtracted from the **whole** spectrum. The default model is **constant + Gaussian tail**, c + A·exp(−(E−Ec)²/2σ²), which models a scatter peak passing through the fluorescence window; *linear* and *constant* are also available. Points are weighted by their energy spacing, so the coarse pre-edge steps count as much as the dense edge points. A polynomial (degree 0–2) is then fit to the post-edge, and the edge step is that polynomial at E0. *Flatten* removes the post-edge curvature above E0.
 - Windows are given in eV relative to E0, so they carry over between samples. E0 defaults to the derivative maximum; type a value to fix it.
 - Changing a control stores settings for the current group only. *Apply these settings to all groups* makes them the defaults.
 
 *Write* saves `normalized/<group>.csv` (energy, mu, pre_edge, post_edge, norm, flat) and `normalized/normalization_params.json`, which records every setting and fitted value.
+
+![](shot3.jpg)
 
 **4 · LCF.** Every subset of the selected standards (up to *Max components*) is fit to the normalized sample using non-negative least squares. The sum of weights is **not** forced to 1, so a sum far from 1 points to a missing standard or a normalization problem.
 - Fits are ranked by R-factor = Σ(data−fit)²/Σdata².
