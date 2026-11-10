@@ -1,17 +1,17 @@
 # quickXANES
 
-A minimal XANES toolkit.
+A minimal XANES processing toolkit.
 
 ![](logo.png)
 
 ## Install & run
 
-Please install using conda.
+Please install using conda!
 
 ```bash
 conda env create -f environment.yml      # once
 conda activate quickxanes
-python quickXANES.py --data YOUR_DATA_DIRECTORY # e.g., ../SSRL/bl143_nov26/xas
+python quickXANES.py --data YOUR_DATA_DIRECTORY # for instance, ../SSRL/bl143_nov26/xas
 ```
 
 A browser tab will open at http://127.0.0.1:8050. 
@@ -23,7 +23,7 @@ Use `--out` or the *Output folder* field to change that.
 
 **Queue (left panel).** Every `.xdi`/`.dat` scan in the folder is listed. When the same scan exists as both, the `.xdi` is used. Ticking a row's box *selects* it. *Add selected to queue* and *Remove selected from queue* change what is analyzed: only queued files (✓; others are grayed out) go into QC, normalization and LCF. Removing one replicate drops it from its group's average. *Add all shown* queues every row that matches the filter box, *queue only* shows just the queue, and the counter shows how many files are queued. Click a row to make it the current file; *Prev/Next* step through the queue.
 
-- **Replicates** share a *group*. Groups are suggested by stripping the trailing scan counter (`name_002_001`, `name_002_002` → `name_002`). Edit a group cell to change that, or change the regex and click *Auto-group*.
+- **Replicates** share a *group*. Groups are suggested by reading the trailing scan counter (`name_002_001`, `name_002_002` → `name_002`). Edit a group cell to change that, or change the regex and click *Auto-group*. I've just used the default for the beamlines I've used `001, 002, etc.` but use regex as you see fit :)
 
 - **Role** is `sample`, `standard` (used in LCF), or `calibration` (the energy-calibration standard). Set it in the table or with the buttons under the queue.
 
@@ -32,17 +32,17 @@ Use `--out` or the *Output folder* field to change that.
 - *transmission*: ln(I0/I1)
 - *column*: an existing μ column
 
-The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the default for every file. To drop a channel with spurious data from **one** file, untick it under *Channels used for this file*. It's then excluded from that file's Σ everywhere downstream and drawn dotted in the plot, while other files keep all channels. *Write binned files* saves `binned/<file>.csv` (energy, raw μ, and the raw columns used).
+The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the default for every file. To drop a channel with spurious data from **one** file, untick it under *Channels used for this file*. It's then exuded from that file's Σ everywhere downstream and drawn dotted in the plot, while other files keep all channels. *Write binned files* saves `binned/<file>.csv` (energy, raw μ, and the raw columns used).
 
 ![](shot1.jpg)
 
 
 **2 · QC.**
-- **Dead-time**: per-channel τ (μs). Each channel is scaled by ICR_true/ICR_measured, with the paralyzable model ICR_meas = ICR_true·exp(−ICR_true·τ) (or the non-paralyzable one). The correction is off until you tick *apply correction*, and τ = 0 leaves a channel uncorrected. Leave at zero if unsure, or speak with your beamline scientist!
+- **Dead-time**: per-channel τ (μs). Each channel is scaled by ICR_true/ICR_measured, with the paralyzable model ICR_meas = ICR_true·exp(−ICR_true·τ) (or the non-paralyzable one). The correction is off until you tick *apply correction*, and τ = 0 leaves a channel uncorrected. **Leave at zero if unsure, or speak with your beamline scientist!**
 
 - **Replicates averaged**: untick a bad scan to drop it from the group average. The lower plot shows each replicate minus the average. The table lists each file's channels (e.g. "all but FF1"), gives the RMS deviation, and flags short scans.
 
-- **Calibration**: pick the calibration group, the feature (peak max or 1st-derivative max) and its reference energy, then click *Compute shift*. The one ΔE is applied to every scan, and you can also type ΔE by hand. (Cl-red, Nov 2026: peak at 2821.2 eV.)
+- **Calibration**: pick the calibration group, the feature (peak max or 1st-derivative max) and its reference energy, then ick *Compute shift*. The one ΔE is applied to every scan, and you can also type ΔE by hand.
 
 *Write* saves `qc/<group>.csv` (averaged, calibrated, dead-time-corrected μ ± std) and `qc/qc_report.csv`.
 
@@ -69,7 +69,7 @@ All the settings you used to QC, normalize, and fit your XANES live in one JSON 
 To reproduce every output with no app:
 
 ```bash
-python quickXANES.py --params ../SSRL/bl143_nov26/processed/params/quickxanes_params.json --run
+python quickXANES.py --params YOURDATAFOLDER/processed/params/quickxanes_params.json --run
 ```
 
 To pick up where you left off in the app, use the same `--params` without `--run`.
