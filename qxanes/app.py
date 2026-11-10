@@ -273,29 +273,42 @@ def _lcf_panel():
             _field("Standards (groups with role 'standard')", dcc.Checklist(id="lcf-standards", className="vlist")),
             _field("Fit range (eV rel. sample E0)", html.Div([_numin("lcf-lo"), " – ", _numin("lcf-hi")])),
             _field("Max components", _numin("lcf-max", width="4.5em")),
-            _field("Fits kept per sample in CSV", _numin("lcf-top", width="4.5em")),
+            _field("Candidate fits kept per sample (record CSV)", _numin("lcf-top", width="4.5em")),
         ]),
         html.P("Every subset of the selected standards is fit with weights ≥ 0; the sum is not forced to 1 "
                "(a sum far from 1 flags a missing standard or a normalization problem). Ranked by R-factor, which "
-               "always improves with more standards; 'p vs simpler' tests whether the extra one is justified.",
-               className="hint"),
+               "always improves with more standards; 'p vs simpler' tests whether the extra one is justified. "
+               "Click a row to inspect that fit, then lock in your decision with 'Use selected LCF': only "
+               "locked-in fits are exported.", className="hint"),
         html.Div(id="lcf-readout", className="readout"),
         dash_table.DataTable(id="lcf-table", row_selectable="single", selected_rows=[0],
                              columns=[{"name": c, "id": c} for c in
-                                      ["rank", "components", "fractions", "weights ± err", "sum", "R-factor",
+                                      ["use", "rank", "components", "fractions", "weights ± err", "sum", "R-factor",
                                        "reduced χ²", "p vs simpler"]],
                              tooltip_header={"p vs simpler": "F-test (Hamilton) p-value that the last-added standard "
                                                              "is justified vs. the best fit with one fewer. Small = "
-                                                             "justified. Optimistic: XANES points are correlated."},
+                                                             "justified. Optimistic: XANES points are correlated.",
+                                             "use": "✓ = the fit locked in for this sample (the one exported)"},
                              style_cell={"fontFamily": "inherit", "fontSize": "12px", "padding": "3px 6px",
                                          "textAlign": "left", "border": "1px solid #e1e0d9",
                                          "whiteSpace": "normal", "height": "auto"},
+                             style_cell_conditional=[{"if": {"column_id": "use"}, "width": "36px",
+                                                      "textAlign": "center"}],
+                             style_data_conditional=[{"if": {"filter_query": '{use} = "✓"'},
+                                                      "backgroundColor": "#e9f5e9", "fontWeight": 600}],
                              style_header={"fontWeight": 600, "backgroundColor": "#f3f2ee", "color": "#52514e"},
                              page_size=10),
+        html.Div(className="row", children=[
+            html.Button("Use selected LCF", id="lcf-use", className="primary",
+                        title="Lock in the highlighted fit for this sample; this is the fit that gets exported"),
+            html.Button("Unlock", id="lcf-unlock", title="Remove this sample's locked-in fit"),
+            html.Div(id="lcf-lock-readout", className="readout"),
+        ]),
         dcc.Loading(dcc.Graph(id="lcf-graph", config={"displaylogo": False}), type="dot", delay_show=400),
         html.Div(className="row", children=[
-            html.Button("Fit all samples + write CSV", id="write-lcf", className="primary"),
-            html.Span("→ processed/lcf/lcf_results.csv and lcf/fits/<sample>_best.csv", className="hint"),
+            html.Button("Write LCF results (locked-in fits)", id="write-lcf", className="primary"),
+            html.Span("→ processed/lcf/lcf_results.csv (one locked-in fit per sample), lcf_candidates.csv "
+                      "(top fits, for the record) and lcf/fits/<sample>_selected.csv", className="hint"),
         ]),
     ])
 
@@ -769,38 +782,61 @@ def register(app: Dash, S: Session):
             lcf["top_n"] = max(1, int(_num(top) or 5))
             return _rev()
 
+    def _lock_text(fit, warn):
+        n_samples = len(S.sample_groups())
+        n_done = n_samples - len(S.lcf_undecided())
+        progress = html.Span(f"{n_done} of {n_samples} samples decided", className="hint")
+        if fit is None and not warn:
+            return [_status("No fit locked in for this sample yet: select a row, then 'Use selected LCF'.", "info"),
+                    progress]
+        out = [_status(f"Locked in: {' + '.join(fit['components'])} "
+                       f"({', '.join(f'{100 * v:.1f}%' for v in fit['fractions'])}; R = {fit['r_factor']:.2e}). "
+                       f"This fit is exported.")] if fit else []
+        return out + [_status(w, "warn") for w in warn] + [progress]
+
     @app.callback(Output("lcf-graph", "figure"), Output("lcf-table", "data"), Output("lcf-readout", "children"),
-                  Output("lcf-table", "selected_rows"),
+                  Output("lcf-table", "selected_rows"), Output("lcf-lock-readout", "children"),
                   Input("rev", "data"), Input("tabs", "value"), Input("lcf-table", "selected_rows"),
                   State("current", "data"))
     def draw_lcf(_r, tab, sel, cur):
         if tab != "lcf":
-            return no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update
         with LOCK:
             g = _group_of(S, cur)
             if not g:
-                return plots.message("No file selected."), [], "", [0]
+                return plots.message("No file selected."), [], "", [0], ""
             if S.role(g) != "sample":
                 return (plots.message(f"'{g}' has role '{S.role(g)}'. Select a sample to fit it."), [],
-                        _status("LCF runs on groups with role 'sample'.", "info"), [0])
+                        _status("LCF runs on groups with role 'sample'.", "info"), [0], "")
             if not S.lcf_standards():
                 return (plots.message("Mark at least one queued group as 'standard'."), [],
-                        _status("No standards selected.", "warn"), [0])
+                        _status("No standards selected.", "warn"), [0], "")
             try:
-                s, fits, warn = S.lcf(g)
+                cache: dict = {}
+                s, fits, warn = S.lcf(g, cache)
+                locked, _, lock_warn = S.lcf_selected_fit(g, fits, cache)
             except Exception as exc:
                 traceback.print_exc()
-                return plots.message(f"LCF of {g} failed: {exc}"), [], _status(str(exc), "error"), [0]
-            new_sample = ctx.triggered_id != "lcf-table"
-            i = 0 if new_sample or not sel else min(sel[0], max(len(fits) - 1, 0))
-            rows = [{"rank": k + 1, "components": " + ".join(f["components"]),
+                return plots.message(f"LCF of {g} failed: {exc}"), [], _status(str(exc), "error"), [0], ""
+            shown = fits[:50]
+            ranks = list(range(1, len(shown) + 1))
+            lock_set = set(locked["components"]) if locked else None
+            lock_idx = next((k for k, f in enumerate(shown) if set(f["components"]) == lock_set), None)
+            if locked is not None and lock_idx is None:   # locked fit outside the candidate list: show it too
+                shown, ranks, lock_idx = shown + [locked], ranks + ["—"], len(shown)
+            if ctx.triggered_id == "lcf-table" and sel:
+                i = min(sel[0], max(len(shown) - 1, 0))
+            else:   # new sample or settings changed: show the locked-in fit, else the best one
+                i = lock_idx if lock_idx is not None else 0
+            rows = [{"use": "✓" if k == lock_idx else "", "rank": ranks[k], "components": " + ".join(f["components"]),
+                     "combo": "␟".join(f["components"]),   # hidden key: exact component list
                      "fractions": ", ".join(f"{100 * v:.1f}%" for v in f["fractions"]),
                      "weights ± err": ", ".join(f"{w:.3f}±{e:.3f}" for w, e in zip(f["weights"], f["errors"])),
                      "sum": round(f["sum"], 3), "R-factor": f"{f['r_factor']:.3e}", "reduced χ²": f"{f['redchi']:.3e}",
                      "p vs simpler": "—" if np.isnan(f["p_vs_simpler"]) else
                      ("<0.001" if f["p_vs_simpler"] < 1e-3 else f"{f['p_vs_simpler']:.3f}")}
-                    for k, f in enumerate(fits[:50])]
-            fit = fits[i] if fits else None
+                    for k, f in enumerate(shown)]
+            fit = shown[i] if shown else None
             lo, hi = S.params["lcf"]["range"]
             msg = [html.Span(f"{g}: {len(fits)} acceptable fits, range E0{lo:+g} to E0{hi:+g} eV "
                              f"({s['e0'] + lo:.1f} – {s['e0'] + hi:.1f} eV)")]
@@ -808,7 +844,26 @@ def register(app: Dash, S: Session):
             if fit and abs(fit["sum"] - 1) > 0.1:
                 msg.append(_status(f"weights sum to {fit['sum']:.2f}: check normalization or missing standards",
                                    "warn"))
-            return plots.fig_lcf(g, fit, S.lcf_standards(), s), rows, msg, [i]
+            return (plots.fig_lcf(g, fit, S.lcf_standards(), s), rows, msg, [i] if shown else [],
+                    _lock_text(locked, lock_warn))
+
+    @app.callback(Output("rev", "data", allow_duplicate=True), Output("status", "children", allow_duplicate=True),
+                  Input("lcf-use", "n_clicks"), Input("lcf-unlock", "n_clicks"),
+                  State("lcf-table", "selected_rows"), State("lcf-table", "data"), State("current", "data"),
+                  prevent_initial_call=True)
+    def lock_lcf(_u, _x, sel, rows, cur):
+        with LOCK:
+            g = _group_of(S, cur)
+            if not g or S.role(g) != "sample":
+                return no_update, _status("Select a sample first.", "warn")
+            if ctx.triggered_id == "lcf-unlock":
+                S.lcf_select(g, None)
+                return _rev(), _status(f"{g}: locked-in fit removed; this sample is left out of the export.", "info")
+            if not rows or not sel or sel[0] >= len(rows):
+                return no_update, _status("Select a fit in the table first.", "warn")
+            combo = rows[sel[0]]["combo"].split("␟")
+            S.lcf_select(g, combo)
+            return _rev(), _status(f"{g}: locked in {' + '.join(combo)}")
 
     # --- write outputs
     @app.callback(Output("status", "children", allow_duplicate=True),
@@ -825,7 +880,15 @@ def register(app: Dash, S: Session):
                 paths = fn()
                 S.save_params()
                 folder = os.path.dirname(paths[0]) if paths else S.params["output_dir"]
-                return _status(f"Wrote {len(paths)} files → {folder} (parameters saved to params/)")
+                done = _status(f"Wrote {len(paths)} files → {folder} (parameters saved to params/)")
+                if trig != "write-lcf":
+                    return done
+                undecided = S.lcf_undecided()
+                extra = [_status(w, "warn") for w in S.lcf_warnings]
+                if undecided:
+                    extra.append(_status(f"{len(undecided)} sample(s) have no locked-in fit and were left out of "
+                                         f"lcf_results.csv: {', '.join(undecided)}", "warn"))
+                return [done] + [html.Br()] * bool(extra) + extra
             except Exception as exc:
                 return fail("Write", exc)
 

@@ -14,7 +14,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from .lcf import fits_to_rows, lcf_combinatorial
+from .lcf import fit_to_row, fits_to_rows, lcf_combinatorial, lcf_fit_combo
 from .normalize import DEFAULT_NORM, normalize
 from .processing import average, compute_signal, find_feature, replicate_deviation_pct
 from .readers import Scan, detect_columns, discover, read_scan, suggest_group
@@ -39,7 +39,8 @@ def default_params() -> dict:
         "calibration": {"group": None, "feature": "peak", "reference_eV": None, "window": [None, None],
                         "measured_eV": None, "shift_eV": 0.0},
         "normalization": {"defaults": copy.deepcopy(DEFAULT_NORM), "groups": {}},
-        "lcf": {"standards": None, "range": [-20.0, 50.0], "max_components": 3, "top_n": 5},
+        # selected: sample group -> standards of the fit the user locked in (what gets exported)
+        "lcf": {"standards": None, "range": [-20.0, 50.0], "max_components": 3, "top_n": 5, "selected": {}},
     }
 
 
@@ -80,6 +81,7 @@ class Session:
         self._scans: dict[str, tuple[float, Scan]] = {}
         self.current: str | None = None   # UI cursor (not saved)
         self.view: str = "all"            # UI queue-table view: "all" | "queue" (not saved)
+        self.lcf_warnings: list[str] = []   # from the last LCF export
         for f in self.params["files"].values():   # params saved before v0.1.1 kept an include-list
             legacy = f.pop("channels", None)
             if legacy is not None and "exclude_channels" not in f:
@@ -219,18 +221,49 @@ class Session:
         avail = self.standard_groups()
         return avail if chosen is None else [g for g in chosen if g in avail]
 
-    def lcf(self, sample: str, normalized_cache: dict | None = None) -> tuple[dict, list[dict], list[str]]:
-        cache = normalized_cache if normalized_cache is not None else {}
+    def _lcf_inputs(self, sample: str, cache: dict):
         for g in [sample, *self.lcf_standards()]:
             if g not in cache:
                 cache[g] = self.normalized(g)
         s = cache[sample]
         stds = {g: (cache[g]["energy"], self.final_norm(cache[g])) for g in self.lcf_standards()}
         lo, hi = self.params["lcf"]["range"]
-        erange = (s["e0"] + float(lo), s["e0"] + float(hi))
+        return s, stds, (s["e0"] + float(lo), s["e0"] + float(hi))
+
+    def lcf(self, sample: str, normalized_cache: dict | None = None) -> tuple[dict, list[dict], list[str]]:
+        s, stds, erange = self._lcf_inputs(sample, normalized_cache if normalized_cache is not None else {})
         fits, warn = lcf_combinatorial(s["energy"], self.final_norm(s), stds, erange,
                                        int(self.params["lcf"]["max_components"]))
         return s, fits, warn
+
+    # locked-in choice per sample: the standards of the fit the user decided on
+    def lcf_selection(self, sample: str) -> list[str] | None:
+        return self.params["lcf"].setdefault("selected", {}).get(sample) or None
+
+    def lcf_select(self, sample: str, components: list[str] | None) -> None:
+        sel = self.params["lcf"].setdefault("selected", {})
+        if components:
+            sel[sample] = list(components)
+        else:
+            sel.pop(sample, None)
+
+    def lcf_selected_fit(self, sample: str, fits: list[dict], cache: dict) -> tuple[dict | None, int | None, list[str]]:
+        """(fit, rank among candidates or None, warnings) for the locked-in combination.
+
+        The choice is stored as a set of standards; weights are refit with the current settings, so
+        a locked fit outside the candidate list (e.g. more components than max) still resolves."""
+        combo = self.lcf_selection(sample)
+        if not combo:
+            return None, None, []
+        for i, f in enumerate(fits):
+            if set(f["components"]) == set(combo):
+                return f, i + 1, []
+        s, stds, erange = self._lcf_inputs(sample, cache)
+        f, warn = lcf_fit_combo(s["energy"], self.final_norm(s), stds, erange, combo)
+        return f, None, [f"locked fit {' + '.join(combo)}: {w}" for w in warn]
+
+    def lcf_undecided(self) -> list[str]:
+        return [g for g in self.sample_groups() if not self.lcf_selection(g)]
 
     # ------------------------------------------------------------------ outputs
     def out(self, sub: str) -> str:
@@ -306,27 +339,42 @@ class Session:
         return written + [jpath]
 
     def write_lcf(self) -> list[str]:
-        """Step 4 output: lcf/lcf_results.csv (top N fits per sample) + lcf/fits/<sample>_best.csv."""
+        """Step 4 output.
+
+        lcf/lcf_results.csv     one row per sample: the fit the user locked in (samples without one are left out)
+        lcf/lcf_candidates.csv  top N fits per sample for the record, `selected` marks the locked-in one
+        lcf/fits/<sample>_selected.csv  data, fit, residual and weighted components of the locked-in fit
+        """
         stds = self.lcf_standards()
         if not stds:
             raise ValueError("no standards: set role 'standard' on at least one queued group")
         cache: dict = {}
-        rows, written = [], []
+        results, candidates, written = [], [], []
+        self.lcf_warnings: list[str] = []
         top_n = int(self.params["lcf"]["top_n"])
         for g in self.sample_groups():
             _, fits, _ = self.lcf(g, cache)
-            rows += fits_to_rows(g, fits, stds, top_n)
-            if fits:
-                best = fits[0]
-                df = pd.DataFrame({"energy_eV": best["energy"], "data": best["data"], "fit": best["fit"],
-                                   "residual": best["data"] - best["fit"],
-                                   **{f"part[{n}]": v for n, v in best["parts"].items()}})
-                path = os.path.join(self.out(os.path.join("lcf", "fits")), safe_name(g) + "_best.csv")
-                df.to_csv(path, index=False)
-                written.append(path)
+            chosen, rank, warn = self.lcf_selected_fit(g, fits, cache)
+            self.lcf_warnings += [f"{g}: {w}" for w in warn]
+            candidates += fits_to_rows(g, fits, stds, top_n, self.lcf_selection(g))
+            if chosen is None:
+                continue
+            if rank is None or rank > top_n:   # keep the chosen fit in the candidate record too
+                candidates.append(fit_to_row(g, chosen, stds, rank=rank, selected=True))
+            results.append(fit_to_row(g, chosen, stds, rank_by_r_factor=rank))
+            df = pd.DataFrame({"energy_eV": chosen["energy"], "data": chosen["data"], "fit": chosen["fit"],
+                               "residual": chosen["data"] - chosen["fit"],
+                               **{f"part[{n}]": v for n, v in chosen["parts"].items()}})
+            path = os.path.join(self.out(os.path.join("lcf", "fits")), safe_name(g) + "_selected.csv")
+            df.to_csv(path, index=False)
+            written.append(path)
         rpath = os.path.join(self.out("lcf"), "lcf_results.csv")
-        pd.DataFrame(rows).to_csv(rpath, index=False)
-        return [rpath] + written
+        cols = ["sample", "rank_by_r_factor", "n_components", "components", "r_factor", "chi2", "reduced_chi2",
+                "sum_weights", "p_vs_simpler", "fit_E_min", "fit_E_max", "n_points"]
+        pd.DataFrame(results, columns=None if results else cols).to_csv(rpath, index=False)
+        cpath = os.path.join(self.out("lcf"), "lcf_candidates.csv")
+        pd.DataFrame(candidates).to_csv(cpath, index=False)
+        return [rpath, cpath] + written
 
     def run_all(self) -> dict[str, list[str]]:
         out = {"binned": self.write_binned(), "qc": self.write_qc(), "normalized": self.write_normalized()}

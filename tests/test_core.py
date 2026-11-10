@@ -11,7 +11,9 @@ from qxanes.lcf import lcf_combinatorial  # noqa: E402
 from qxanes.normalize import normalize  # noqa: E402
 from qxanes.processing import average, deadtime_factor, find_e0, find_feature  # noqa: E402
 
-DATA = os.path.join(os.path.dirname(__file__), "..", "..", "SSRL", "bl143_nov26", "xas")
+# real-data tests run when QXANES_TEST_DATA points at a folder of beamtime scans (e.g. SSRL/bl143_nov26/xas)
+DATA = os.environ.get("QXANES_TEST_DATA",
+                      os.path.join(os.path.dirname(__file__), "..", "..", "SSRL", "bl143_nov26", "xas"))
 
 
 def grid():
@@ -139,3 +141,42 @@ def test_legacy_channel_include_list_is_migrated():
     assert S.params["files"]["a"]["exclude_channels"] == ["FF1", "FF4"]
     assert S.params["files"]["b"]["exclude_channels"] == []
     assert "channels" not in S.params["files"]["a"]
+
+
+@pytest.mark.skipif(not os.path.isdir(DATA), reason="beamtime data not present")
+def test_locked_in_lcf_is_what_gets_exported(tmp_path):
+    import pandas as pd
+    from qxanes.session import Session
+    S = Session()
+    S.load_dir(DATA, str(tmp_path))
+    for s in S.stems():
+        if s.startswith(("NaCl_2500", "w3CPA_2500", "w9Phe_2500", "w6_XPAH9", "w7_XPAH11")):
+            S.params["files"][s]["queued"] = True
+    for g in ("NaCl_2500_001", "w3CPA_2500_002", "w9Phe_2500_003"):
+        S.params["roles"][g] = "standard"
+    _, fits, _ = S.lcf("w6_XPAH9_005")
+    second = fits[1]["components"]                      # deliberately not the lowest-R fit
+    S.lcf_select("w6_XPAH9_005", second)
+    S.write_lcf()
+    res = pd.read_csv(tmp_path / "lcf" / "lcf_results.csv")
+    assert list(res["sample"]) == ["w6_XPAH9_005"]      # undecided w7_XPAH11 is left out
+    assert set(res.loc[0, "components"].split(" + ")) == set(second)
+    assert res.loc[0, "rank_by_r_factor"] == 2
+    cand = pd.read_csv(tmp_path / "lcf" / "lcf_candidates.csv")
+    assert cand["selected"].sum() == 1 and set(cand.loc[cand["selected"], "sample"]) == {"w6_XPAH9_005"}
+    assert set(cand["sample"]) == {"w6_XPAH9_005", "w7_XPAH11_004"}
+    assert (tmp_path / "lcf" / "fits" / "w6_XPAH9_005_selected.csv").exists()
+    assert S.lcf_undecided() == ["w7_XPAH11_004"]
+    # the decision survives the params JSON and is refit identically
+    S2 = Session.from_json(S.save_params(str(tmp_path / "p.json")))
+    S2.params["output_dir"] = str(tmp_path / "again")
+    S2.write_lcf()
+    res2 = pd.read_csv(tmp_path / "again" / "lcf" / "lcf_results.csv")
+    num = res.select_dtypes("number").columns
+    assert np.allclose(res[num].to_numpy(), res2[num].to_numpy(), equal_nan=True)
+    # a locked combination outside the candidate list (more components than max) still resolves
+    S.params["lcf"]["max_components"] = 1
+    S.lcf_select("w6_XPAH9_005", ["NaCl_2500_001", "w9Phe_2500_003"])
+    _, fits1, _ = S.lcf("w6_XPAH9_005")
+    f, rank, warn = S.lcf_selected_fit("w6_XPAH9_005", fits1, {})
+    assert f is not None and rank is None and set(f["components"]) == {"NaCl_2500_001", "w9Phe_2500_003"}

@@ -52,6 +52,10 @@ def main(argv=None):
             ap.error("--run needs --params")
         for step, paths in S.run_all().items():
             print(f"{step:11s} {len(paths):3d} files  {os.path.dirname(paths[0]) if paths else ''}")
+        for w in S.lcf_warnings:
+            print(f"warning: {w}")
+        if S.standard_groups() and S.lcf_undecided():
+            print(f"warning: no locked-in LCF for {', '.join(S.lcf_undecided())}; left out of lcf_results.csv")
         return
 
     from qxanes.app import create_app

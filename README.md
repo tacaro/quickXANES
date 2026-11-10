@@ -37,7 +37,7 @@ Use `--out` or the *Output folder* field to change that.
 - *transmission*: ln(I0/I1)
 - *column*: an existing μ column
 
-The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the default for every file. To drop a channel with spurious data from **one** file, untick it under *Channels used for this file*. It's then exuded from that file's Σ everywhere downstream and drawn dotted in the plot, while other files keep all channels. *Write binned files* saves `binned/<file>.csv` (energy, raw μ, and the raw columns used).
+The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the default for every file. To drop a channel with spurious data from **one** file, untick it under *Channels used for this file*. It's then excluded from that file's Σ everywhere downstream and drawn dotted in the plot, while other files keep all channels. *Write binned files* saves `binned/<file>.csv` (energy, raw μ, and the raw columns used).
 
 ![](shot1.jpg)
 
@@ -47,7 +47,7 @@ The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the def
 
 - **Replicates averaged**: untick a bad scan to drop it from the group average. The lower plot shows each replicate minus the average. The table lists each file's channels (e.g. "all but FF1"), gives the RMS deviation, and flags short scans.
 
-- **Calibration**: pick the calibration group, the feature (peak max or 1st-derivative max) and its reference energy, then ick *Compute shift*. The one ΔE is applied to every scan, and you can also type ΔE by hand.
+- **Calibration**: pick the calibration group, the feature (peak max or 1st-derivative max) and its reference energy, then click *Compute shift*. The one ΔE is applied to every scan, and you can also type ΔE by hand.
 
 *Write* saves `qc/<group>.csv` (averaged, calibrated, dead-time-corrected μ ± std) and `qc/qc_report.csv`.
 
@@ -57,19 +57,24 @@ The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the def
 - Windows are given in eV relative to E0, so they carry over between samples. E0 defaults to the derivative maximum, but can be changed manually as well.
 - Changing a setting saves it for the current group only. The button *Apply these settings to all groups* makes them the defaults.
 
-*Write* saves `normalized/<group>.csv` (energy, mu, pre_edge, post_edge, norm, flat) and `normalized/normalization_params.json`, which records all settings and fitted value.
+*Write* saves `normalized/<group>.csv` (energy, mu, pre_edge, post_edge, norm, flat) and `normalized/normalization_params.json`, which records all settings and fitted values.
 
 ![](shot3.jpg)
 
 **4 · LCF.** Every subset of the selected standards (up to *Max components*) is fit to the normalized sample using non-negative least squares. The sum of weights is **not** forced to 1, so a sum far from 1 points to a missing standard or a normalization problem.
 - Fits are ranked by R-factor = Σ(data−fit)²/Σdata².
 - R-factor always improves when you add a standard. *p vs simpler* is a Hamilton F-test of whether the last-added standard is justified (small p = justified). It is optimistic, because XANES points are oversampled.
+- **You choose the fit.** Click a row to inspect it in the plot (data, fit, weighted components, residual). Then click *Use selected LCF* below the table to lock it in. The locked fit is marked ✓, and a counter shows how many samples are decided. *Unlock* removes the choice.
+- The choice is saved in the params JSON as a set of standards. Its weights are refit with the current fit range when you export, so changing the range after locking changes the exported numbers. If you deselect a standard that a locked fit uses, that sample is left out of the export with a warning.
 
-*Fit all samples + write CSV* saves `lcf/lcf_results.csv`, with the top N fits per sample and a weight, error and fraction column per standard, plus `lcf/fits/<sample>_best.csv`.
+*Write LCF results (locked-in fits)* saves:
+- `lcf/lcf_results.csv`: one row per sample with the fit you locked in. It has a weight, error and fraction column per standard, and `rank_by_r_factor` records where your choice ranked. **Samples without a locked-in fit are left out**, and the app lists them.
+- `lcf/lcf_candidates.csv`: the top N fits per sample, for the record, with a `selected` column marking your choice.
+- `lcf/fits/<sample>_selected.csv`: data, fit, residual and weighted components of the locked-in fit.
 
 ## Replication
 
-All the settings you used to QC, normalize, and fit your XANES live in one JSON file: queue, groups, roles, signal, dead-time, calibration, normalization and LCF. It's written to `processed/params/quickxanes_params.json` on every *Write* and by *Save params*. 
+All the settings you used to QC, normalize, and fit your XANES live in one JSON file: queue, groups, roles, signal, dead-time, calibration, normalization and LCF, including the fit you locked in for each sample. It's written to `processed/params/quickxanes_params.json` on every *Write* and by *Save params*. 
 
 To reproduce every output with no app:
 
@@ -77,7 +82,7 @@ To reproduce every output with no app:
 python quickXANES.py --params YOURDATAFOLDER/processed/params/quickxanes_params.json --run
 ```
 
-To pick up where you left off in the app, use the same `--params` without `--run`.
+This prints a warning for any sample without a locked-in LCF fit. To pick up where you left off in the app, use the same `--params` without `--run`.
 
 ## Files in this repo
 
@@ -86,12 +91,14 @@ quickXANES.py          entry point (app or --run)
 qxanes/readers.py      .xdi, SSRL .dat, plain-column readers; column-role detection
 qxanes/processing.py   μ(E), dead-time, calibration features, averaging
 qxanes/normalize.py    pre-edge (Gaussian tail / linear / constant), post-edge, flatten
-qxanes/lcf.py          combinatorial NNLS LCF + Hamilton test
+qxanes/lcf.py          combinatorial NNLS LCF + Hamilton test; refit of a locked-in combination
 qxanes/session.py      parameters + pipeline + file outputs (shared by app and CLI)
 qxanes/plots.py        Plotly figures
 qxanes/app.py          Dash UI
-tests/test_core.py     synthetic known-answer tests + real-data smoke test (pytest tests)
+tests/test_core.py     synthetic known-answer tests + real-data tests
 ```
+
+To run the tests: `pytest tests`. The real-data tests are skipped unless `QXANES_TEST_DATA` points at a folder of scans, e.g. `QXANES_TEST_DATA=../SSRL/bl143_nov26/xas pytest tests`.
 
 
 # Credit
