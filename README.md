@@ -6,11 +6,16 @@ A minimal XANES processing toolkit.
 
 ## Install & run
 
-Please install using conda!
+First, clone this repository and `cd` into it.
+
+Install dependencies using conda, activate conda, then run the program:
 
 ```bash
+# conda
 conda env create -f environment.yml      # once
-conda activate quickxanes
+conda activate quickxanes # whenever you run the program
+
+# do the thing!
 python quickXANES.py --data YOUR_DATA_DIRECTORY # for instance, ../SSRL/bl143_nov26/xas
 ```
 
