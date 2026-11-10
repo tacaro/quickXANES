@@ -49,10 +49,10 @@ The plot shows Σ/I0 and each channel / I0. *Fluorescence channels* sets the def
 ![](shot2.jpg)
 
 **3 · Normalize.** The pre-edge background is fit over a window and subtracted from the **whole** spectrum. The default model is **constant + Gaussian tail**, c + A·exp(−(E−Ec)²/2σ²), which models a scatter peak passing through the fluorescence window; *linear* and *constant* are also available. Points are weighted by their energy spacing, so the coarse pre-edge steps count as much as the dense edge points. A polynomial (degree 0–2) is then fit to the post-edge, and the edge step is that polynomial at E0. *Flatten* removes the post-edge curvature above E0.
-- Windows are given in eV relative to E0, so they carry over between samples. E0 defaults to the derivative maximum; type a value to fix it.
-- Changing a control stores settings for the current group only. *Apply these settings to all groups* makes them the defaults.
+- Windows are given in eV relative to E0, so they carry over between samples. E0 defaults to the derivative maximum, but can be changed manually as well.
+- Changing a setting saves it for the current group only. The button *Apply these settings to all groups* makes them the defaults.
 
-*Write* saves `normalized/<group>.csv` (energy, mu, pre_edge, post_edge, norm, flat) and `normalized/normalization_params.json`, which records every setting and fitted value.
+*Write* saves `normalized/<group>.csv` (energy, mu, pre_edge, post_edge, norm, flat) and `normalized/normalization_params.json`, which records all settings and fitted value.
 
 ![](shot3.jpg)
 
